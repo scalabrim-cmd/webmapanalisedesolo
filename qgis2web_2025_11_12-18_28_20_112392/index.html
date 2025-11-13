@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="initial-scale=1,user-scalable=no,maximum-scale=1,width=device-width">
+        <meta name="mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <link rel="stylesheet" href="css/leaflet.css">
+        <link rel="stylesheet" href="css/L.Control.Layers.Tree.css">
+        <link rel="stylesheet" href="css/qgis2web.css">
+        <link rel="stylesheet" href="css/fontawesome-all.min.css">
+        <link rel="stylesheet" href="css/MarkerCluster.css">
+        <link rel="stylesheet" href="css/MarkerCluster.Default.css">
+        <link rel="stylesheet" href="css/leaflet.photon.css">
+        <link rel="stylesheet" href="css/leaflet-measure.css">
+        <style>
+        html, body, #map {
+            width: 100%;
+            height: 100%;
+            padding: 0;
+            margin: 0;
+        }
+        </style>
+        <title></title>
+    </head>
+    <body>
+        <div id="map">
+        </div>
+        <script src="js/qgis2web_expressions.js"></script>
+        <script src="js/leaflet.js"></script>
+        <script src="js/L.Control.Layers.Tree.min.js"></script>
+        <script src="js/leaflet.rotatedMarker.js"></script>
+        <script src="js/leaflet.pattern.js"></script>
+        <script src="js/leaflet-hash.js"></script>
+        <script src="js/Autolinker.min.js"></script>
+        <script src="js/rbush.min.js"></script>
+        <script src="js/labelgun.min.js"></script>
+        <script src="js/labels.js"></script>
+        <script src="js/leaflet.photon.js"></script>
+        <script src="js/leaflet-measure.js"></script>
+        <script src="js/leaflet.markercluster.js"></script>
+        <script src="data/talhao_1.js"></script>
+        <script src="data/pontos_de_coleta_2.js"></script>
+        
+        <script>
+        var map = L.map('map', {
+            zoomControl:false, maxZoom:28, minZoom:1
+        })
+        var hash = new L.Hash(map);
+        map.attributionControl.setPrefix('<a href="https://github.com/tomchadwin/qgis2web" target="_blank">qgis2web</a> &middot; <a href="https://leafletjs.com" title="A JS library for interactive maps">Leaflet</a> &middot; <a href="https://qgis.org">QGIS</a>');
+        var autolinker = new Autolinker({truncate: {length: 30, location: 'smart'}});
+        // remove popup's row if "visible-with-data"
+        function removeEmptyRowsFromPopupContent(content, feature) {
+         var tempDiv = document.createElement('div');
+         tempDiv.innerHTML = content;
+         var rows = tempDiv.querySelectorAll('tr');
+         for (var i = 0; i < rows.length; i++) {
+             var td = rows[i].querySelector('td.visible-with-data');
+             var key = td ? td.id : '';
+             if (td && td.classList.contains('visible-with-data') && feature.properties[key] == null) {
+                 rows[i].parentNode.removeChild(rows[i]);
+             }
+         }
+         return tempDiv.innerHTML;
+        }
+        // modify popup if contains media
+        function addClassToPopupIfMedia(content, popup) {
+            var tempDiv = document.createElement('div');
+            tempDiv.innerHTML = content;
+            var imgTd = tempDiv.querySelector('td img');
+            if (imgTd) {
+                var src = imgTd.getAttribute('src');
+                if (/\.(jpg|jpeg|png|gif|bmp|webp|avif)$/i.test(src)) {
+                    popup._contentNode.classList.add('media');
+                    setTimeout(function() {
+                        popup.update();
+                    }, 10);
+                } else if (/\.(mp3|wav|ogg|aac)$/i.test(src)) {
+                    var audio = document.createElement('audio');
+                    audio.controls = true;
+                    audio.src = src;
+                    imgTd.parentNode.replaceChild(audio, imgTd);
+                    popup._contentNode.classList.add('media');
+                    setTimeout(function() {
+                        popup.setContent(tempDiv.innerHTML);
+                        popup.update();
+                    }, 10);
+                } else if (/\.(mp4|webm|ogg|mov)$/i.test(src)) {
+                    var video = document.createElement('video');
+                    video.controls = true;
+                    video.src = src;
+                    video.style.width = "400px";
+                    video.style.height = "300px";
+                    video.style.maxHeight = "60vh";
+                    video.style.maxWidth = "60vw";
+                    imgTd.parentNode.replaceChild(video, imgTd);
+                    popup._contentNode.classList.add('media');
+                    // Aggiorna il popup quando il video carica i metadati
+                    video.addEventListener('loadedmetadata', function() {
+                        popup.update();
+                    });
+                    setTimeout(function() {
+                        popup.setContent(tempDiv.innerHTML);
+                        popup.update();
+                    }, 10);
+                } else {
+                    popup._contentNode.classList.remove('media');
+                }
+            } else {
+                popup._contentNode.classList.remove('media');
+            }
+        }
+        var zoomControl = L.control.zoom({
+            position: 'topleft'
+        }).addTo(map);
+        var measureControl = new L.Control.Measure({
+            position: 'topleft',
+            primaryLengthUnit: 'meters',
+            secondaryLengthUnit: 'kilometers',
+            primaryAreaUnit: 'sqmeters',
+            secondaryAreaUnit: 'hectares'
+        });
+        measureControl.addTo(map);
+        document.getElementsByClassName('leaflet-control-measure-toggle')[0].innerHTML = '';
+        document.getElementsByClassName('leaflet-control-measure-toggle')[0].className += ' fas fa-ruler';
+        var bounds_group = new L.featureGroup([]);
+
+        // Helper: compute bbox from GeoJSON talhão
+        function computeBBoxFromGeoJSON(geojson) {
+            var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            try {
+                var coords = geojson.features[0].geometry.coordinates;
+                coords.forEach(function(mp) {
+                    mp.forEach(function(ring) {
+                        ring.forEach(function(pt) {
+                            var lon = pt[0], lat = pt[1];
+                            if (lon < minX) minX = lon;
+                            if (lon > maxX) maxX = lon;
+                            if (lat < minY) minY = lat;
+                            if (lat > maxY) maxY = lat;
+                        });
+                    });
+                });
+            } catch (e) {
+                console.error('computeBBoxFromGeoJSON error', e);
+            }
+            return [[minY, minX], [maxY, maxX]]; // Leaflet LatLngBounds
+        }
+
+        // NDVI layer placeholder (layerGroup) so it can be added to layer control early
+        var layer_ndvi = L.layerGroup();
+        // create pane for NDVI overlays
+        if (!map.getPane('pane_ndvi')) {
+            map.createPane('pane_ndvi');
+            map.getPane('pane_ndvi').style.zIndex = 403;
+            map.getPane('pane_ndvi').style['mix-blend-mode'] = 'normal';
+        }
+
+        // Load NDVI from a PNG that was exported with the same extent as the talhão
+        function addNDVILayerFromPNG(pngPath, fitView) {
+            try {
+                console.log('Loading NDVI image from', pngPath);
+                var imageBounds = computeBBoxFromGeoJSON(json_talhao_1);
+                console.log('Computed NDVI bounds:', imageBounds);
+
+                var ndviOverlay = L.imageOverlay(pngPath, imageBounds, {
+                    attribution: 'NDVI (export)',
+                    interactive: false,
+                    pane: 'pane_ndvi',
+                    opacity: 0.8,
+                    crossOrigin: false
+                });
+
+                // clear previous content and add new overlay into the group
+                layer_ndvi.clearLayers();
+                layer_ndvi.addLayer(ndviOverlay);
+
+                // ensure it's in bounds_group for fitBounds
+                try { bounds_group.removeLayer(ndviOverlay); } catch (e) {}
+                bounds_group.addLayer(ndviOverlay);
+
+                // add to map if not present
+                if (!map.hasLayer(layer_ndvi)) layer_ndvi.addTo(map);
+
+                if (fitView !== false) {
+                    try { map.fitBounds(imageBounds); } catch (e) {}
+                }
+                console.log('NDVI overlay added');
+            } catch (err) {
+                console.error('addNDVILayerFromPNG error', err);
+            }
+        }
+
+        // Minimal ESRI Satellite basemap (restores original satellite layer)
+        var layer_ESRISatellite_0 = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri',
+            maxZoom: 19
+        });
+        // add as base layer (user can toggle in control)
+        layer_ESRISatellite_0.addTo(map);
+
+        // Minimal popup for talhao features (restores basic info popup)
+        function pop_talhao_1(feature, layer) {
+            try {
+                var content = '<b>Talhão</b>';
+                if (feature && feature.properties) {
+                    var rows = '';
+                    for (var k in feature.properties) {
+                        if (feature.properties.hasOwnProperty(k)) {
+                            var v = feature.properties[k];
+                            rows += '<tr><th>' + k + '</th><td>' + (v === null ? '' : String(v)) + '</td></tr>';
+                        }
+                    }
+                    content = '<div class="popup"><table>' + rows + '</table></div>';
+                }
+                layer.bindPopup(content);
+            } catch (e) {
+                console.error('pop_talhao_1 error', e);
+            }
+        }
+
+        // Minimal style for talhao polygon
+        function style_talhao_1_0() {
+            return {
+                color: 'rgba(0,0,0,1.0)',
+                weight: 2,
+                opacity: 1,
+                fill: false,
+                interactive: true
+            };
+        }
+        map.createPane('pane_talhao_1');
+        map.getPane('pane_talhao_1').style.zIndex = 401;
+        map.getPane('pane_talhao_1').style['mix-blend-mode'] = 'normal';
+        var layer_talhao_1 = new L.geoJson(json_talhao_1, {
+            attribution: '',
+            interactive: true,
+            dataVar: 'json_talhao_1',
+            layerName: 'layer_talhao_1',
+            pane: 'pane_talhao_1',
+            onEachFeature: pop_talhao_1,
+            style: style_talhao_1_0,
+        });
+        bounds_group.addLayer(layer_talhao_1);
+        map.addLayer(layer_talhao_1);
+        var pontoCounter = 0;
+        function pop_pontos_de_coleta_2(feature, layer) {
+            pontoCounter++;
+            var numeroPonto = pontoCounter;
+            var popupContent = '<h3>Ponto #' + numeroPonto + ' - Resultados da Análise de Solo</h3>\
+                <table border="1" cellpadding="4">\
+                <tr><th>Parâmetro</th><th>Valor</th></tr>\
+                <tr><td>pH</td><td>' + (feature.properties['pH_1'] !== null ? String(feature.properties['pH_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>CTC (cmol/dm³)</td><td>' + (feature.properties['CTC_1'] !== null ? String(feature.properties['CTC_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>P (mg/dm³)</td><td>' + (feature.properties['P_1'] !== null ? String(feature.properties['P_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>Al (cmol/dm³)</td><td>' + (feature.properties['Al_1'] !== null ? String(feature.properties['Al_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>Ca (cmol/dm³)</td><td>' + (feature.properties['Ca_1'] !== null ? String(feature.properties['Ca_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>Mg (cmol/dm³)</td><td>' + (feature.properties['Mg_1'] !== null ? String(feature.properties['Mg_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>K (cmol/dm³)</td><td>' + (feature.properties['K_1'] !== null ? String(feature.properties['K_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>S (mg/dm³)</td><td>' + (feature.properties['S_1'] !== null ? String(feature.properties['S_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>B (mg/dm³)</td><td>' + (feature.properties['B_1'] !== null ? String(feature.properties['B_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>Cu (mg/dm³)</td><td>' + (feature.properties['Cu_1'] !== null ? String(feature.properties['Cu_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>Fe (mg/dm³)</td><td>' + (feature.properties['Fe_1'] !== null ? String(feature.properties['Fe_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>Mn (mg/dm³)</td><td>' + (feature.properties['Mn_1'] !== null ? String(feature.properties['Mn_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                <tr><td>Zn (mg/dm³)</td><td>' + (feature.properties['Zn_1'] !== null ? String(feature.properties['Zn_1']).replace(/'/g, '\'') : '-') + '</td></tr>\
+                </table>';
+            var content = removeEmptyRowsFromPopupContent(popupContent, feature);
+			layer.on('popupopen', function(e) {
+				addClassToPopupIfMedia(content, e.popup);
+			});
+			layer.bindPopup(content, { maxHeight: 400 });
+			layer.on('click', function() {
+				this.openPopup();
+			});
+        }
+
+        function style_pontos_de_coleta_2_0() {
+            return {
+                pane: 'pane_pontos_de_coleta_2',
+                radius: 4.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(141,90,153,1.0)',
+                interactive: true,
+            }
+        }
+        map.createPane('pane_pontos_de_coleta_2');
+        map.getPane('pane_pontos_de_coleta_2').style.zIndex = 402;
+        map.getPane('pane_pontos_de_coleta_2').style['mix-blend-mode'] = 'normal';
+        var layer_pontos_de_coleta_2 = new L.geoJson(json_pontos_de_coleta_2, {
+            attribution: '',
+            interactive: true,
+            dataVar: 'json_pontos_de_coleta_2',
+            layerName: 'layer_pontos_de_coleta_2',
+            pane: 'pane_pontos_de_coleta_2',
+            onEachFeature: pop_pontos_de_coleta_2,
+            pointToLayer: function (feature, latlng) {
+                var context = {
+                    feature: feature,
+                    variables: {}
+                };
+                return L.circleMarker(latlng, style_pontos_de_coleta_2_0(feature));
+            },
+        });
+        bounds_group.addLayer(layer_pontos_de_coleta_2);
+        layer_pontos_de_coleta_2.addTo(map);
+        
+        // Adiciona listener de clique para os pontos individuais
+        layer_pontos_de_coleta_2.eachLayer(function(layer) {
+            if (layer.bindPopup) {
+                layer.on('click', function(e) {
+                    L.DomEvent.stopPropagation(e);
+                    this.openPopup();
+                });
+            }
+        });
+        
+        var overlaysTree = [
+            {label: '<img src="legend/pontos_de_coleta_2.png" /> pontos_de_coleta', layer: layer_pontos_de_coleta_2},
+            {label: '<img src="legend/talhao_1.png" /> talhao', layer: layer_talhao_1}
+        ];
+        // Add ESRI Satellite overlay only if it exists
+        if (typeof layer_ESRISatellite_0 !== 'undefined') {
+            overlaysTree.push({label: "ESRI Satellite", layer: layer_ESRISatellite_0});
+        }
+        var lay = L.control.layers.tree(null, overlaysTree,{
+            //namedToggle: true,
+            //selectorBack: false,
+            //closedSymbol: '&#8862; &#x1f5c0;',
+            //openedSymbol: '&#8863; &#x1f5c1;',
+            //collapseAll: 'Collapse all',
+            //expandAll: 'Expand all',
+            collapsed: false, 
+        });
+        lay.addTo(map);
+		document.addEventListener("DOMContentLoaded", function() {
+            // set new Layers List height which considers toggle icon
+            function newLayersListHeight() {
+                var layerScrollbarElement = document.querySelector('.leaflet-control-layers-scrollbar');
+                if (layerScrollbarElement) {
+                    var layersListElement = document.querySelector('.leaflet-control-layers-list');
+                    var originalHeight = layersListElement.style.height 
+                        || window.getComputedStyle(layersListElement).height;
+                    var newHeight = parseFloat(originalHeight) - 50;
+                    layersListElement.style.height = newHeight + 'px';
+                }
+            }
+            var isLayersListExpanded = true;
+            var controlLayersElement = document.querySelector('.leaflet-control-layers');
+            var toggleLayerControl = document.querySelector('.leaflet-control-layers-toggle');
+            // toggle Collapsed/Expanded and apply new Layers List height
+            toggleLayerControl.addEventListener('click', function() {
+                if (isLayersListExpanded) {
+                    controlLayersElement.classList.remove('leaflet-control-layers-expanded');
+                } else {
+                    controlLayersElement.classList.add('leaflet-control-layers-expanded');
+                }
+                isLayersListExpanded = !isLayersListExpanded;
+                newLayersListHeight()
+            });	
+			// apply new Layers List height if toggle layerstree
+			if (controlLayersElement) {
+				controlLayersElement.addEventListener('click', function(event) {
+					var toggleLayerHeaderPointer = event.target.closest('.leaflet-layerstree-header-pointer span');
+					if (toggleLayerHeaderPointer) {
+						newLayersListHeight();
+					}
+				});
+			}
+            // Collapsed/Expanded at Start to apply new height
+            setTimeout(function() {
+                toggleLayerControl.click();
+            }, 10);
+            setTimeout(function() {
+                toggleLayerControl.click();
+            }, 10);
+            // Collapsed touch/small screen
+            var isSmallScreen = window.innerWidth < 650;
+            if (isSmallScreen) {
+                setTimeout(function() {
+                    controlLayersElement.classList.remove('leaflet-control-layers-expanded');
+                    isLayersListExpanded = !isLayersListExpanded;
+                }, 500);
+            }  
+        });       
+        // Ensure map fits the loaded layers. Define setBounds if missing.
+        function setBounds() {
+            try {
+                if (typeof bounds_group !== 'undefined' && bounds_group.getLayers().length > 0) {
+                    var b = bounds_group.getBounds();
+                    console.log('bounds_group.getBounds():', b);
+                    if (b.isValid && b.isValid()) {
+                        console.log('Fitting map to bounds_group');
+                        map.fitBounds(b);
+                        return;
+                    }
+                }
+                // fallback: set view to a reasonable default if no bounds
+                map.setView([0, 0], 2);
+            } catch (e) {
+                try { map.setView([0, 0], 2); } catch (e) {}
+            }
+        }
+        setBounds();
+        </script>        
+    </body>
+</html>
